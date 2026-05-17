@@ -10,7 +10,7 @@
 - 支持多域名同时解析
 - 支持 Telegram 和飞书双通道通知推送（飞书支持 HMAC-SHA256 签名校验）
 - Linux 版支持 systemd / cron 定时方案
-- Windows 版支持 Task Scheduler 计划任务（每5分钟 + 开机自启）
+- Windows 版支持 NSSM 系统服务（开机自启 + 持续运行）
 
 ## 系统要求
 
@@ -105,6 +105,8 @@ rm -rf /etc/DDNS /usr/bin/ddns
 
 ## 安装
 
+**前置要求：** 需要先安装 [NSSM (Non-Sucking Service Manager)](https://nssm.cc/download)，并将 `nssm.exe` 放入 PATH 或 `C:\nssm\nssm.exe`。
+
 ```powershell
 # 下载脚本到用户目录
 curl -o "$env:USERPROFILE\ddns.ps1" https://raw.githubusercontent.com/semgooder/sem-ddns/main/ddns.ps1
@@ -128,29 +130,37 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\ddns.ps1"
 3：配置要解析的域名
 4：配置 Telegram 通知
 5：配置飞书通知
-6：安装计划任务（每5分钟运行 + 开机自启）
-7：卸载计划任务
+6：安装 NSSM 服务（开机自启 + 持续运行）
+7：卸载 NSSM 服务
 ```
 
 ### 命令行参数
 
 ```powershell
-# 直接执行 DDNS 更新（适合计划任务调用）
+# 直接执行 DDNS 更新（供 NSSM 服务调用）
 .\ddns.ps1 -Run
 
-# 安装计划任务
+# 安装 NSSM 服务
 .\ddns.ps1 -Install
 
-# 卸载计划任务
+# 卸载 NSSM 服务
 .\ddns.ps1 -Uninstall
 ```
 
-### 计划任务
+### NSSM 系统服务
 
-安装后会自动创建名为 `CloudflareDDNS` 的计划任务：
-- **每 5 分钟**执行一次 DDNS 更新
-- **开机时**自动运行
-- 可在 `taskschd.msc` 中查看和管理
+选择选项 `6` 后，脚本会自动：
+1. 检测 `nssm.exe` 是否可用
+2. 注册名为 `CloudflareDDNS` 的 Windows 服务
+3. 设置为 **自动启动**，以 **LocalSystem** 身份运行
+4. 立即启动服务
+
+服务会持续运行，每次执行完 DDNS 更新后 NSSM 会自动重启脚本（相当于无限循环，间隔约几秒）。
+
+管理方式：
+- **`services.msc`** 中可查看和手动启停
+- 命令行：`nssm start/stop/restart CloudflareDDNS`
+- 日志文件：`%USERPROFILE%\.ddns\ddns.log`
 
 ## 配置文件
 
@@ -174,7 +184,7 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\ddns.ps1"
 ## 卸载
 
 ```powershell
-# 删除计划任务
+# 卸载 NSSM 服务
 .\ddns.ps1 -Uninstall
 
 # 删除配置文件

@@ -6,18 +6,14 @@ param(
 
 $ConfigPath = Join-Path $env:USERPROFILE ".ddns\config.json"
 $LogPath = Join-Path $env:USERPROFILE ".ddns\ddns.log"
-$RunScriptPath = Join-Path $env:USERPROFILE ".ddns\ddns-run.ps1"
+$ServiceName = "CloudflareDDNS"
 
 function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
     $time = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $line = "[$time][$Level] $Message"
     Write-Host $line
-    if ($Level -eq "ERROR") {
-        Add-Content -Path $LogPath -Value $line
-    } else {
-        Add-Content -Path $LogPath -Value $line
-    }
+    Add-Content -Path $LogPath -Value $line
 }
 
 function Write-Info { Write-Log @args -Level "INFO" }
@@ -26,8 +22,7 @@ function Write-Warn { Write-Log @args -Level "WARN" }
 
 function Read-Config {
     if (Test-Path $ConfigPath) {
-        $json = Get-Content $ConfigPath -Raw | ConvertFrom-Json
-        return $json
+        return Get-Content $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
     }
     return $null
 }
@@ -56,8 +51,7 @@ function Get-PublicIPv6 {
     $urls = @("https://api6.ipify.org", "https://ip.sb")
     foreach ($url in $urls) {
         try {
-            $result = Invoke-RestMethod -Uri $url -TimeoutSec 5
-            $ip = $result.Trim()
+            $ip = (Invoke-RestMethod -Uri $url -TimeoutSec 5).Trim()
             if ($ip -match '^([0-9a-fA-F]{1,4}:){1,}[0-9a-fA-F]{0,4}') { return $ip }
         } catch {}
     }
@@ -73,7 +67,6 @@ function Get-CfZoneId {
         $resp = Invoke-RestMethod -Uri "https://api.cloudflare.com/client/v4/zones" -Headers $headers -TimeoutSec 10
         if (-not $resp.success) { return $null }
 
-        # 按域名后缀从长到短匹配，确保精确匹配
         $sorted = $resp.result | Sort-Object { $_.name.Length } -Descending
         foreach ($zone in $sorted) {
             if ($Domain -eq $zone.name -or $Domain.EndsWith(".$($zone.name)")) {
@@ -121,8 +114,7 @@ function Send-Telegram {
     try {
         $uri = "https://api.telegram.org/bot$BotToken/sendMessage"
         $body = @{ chat_id = $ChatId; text = $Message } | ConvertTo-Json
-        $headers = @{ "Content-Type" = "application/json" }
-        Invoke-RestMethod -Uri $uri -Method POST -Headers $headers -Body $body -TimeoutSec 10 | Out-Null
+        Invoke-RestMethod -Uri $uri -Method POST -Headers @{"Content-Type"="application/json"} -Body $body -TimeoutSec 10 | Out-Null
     } catch {}
 }
 
@@ -137,13 +129,11 @@ function Send-Feishu {
             $hmac = New-Object System.Security.Cryptography.HMACSHA256
             $hmac.Key = [Text.Encoding]::UTF8.GetBytes($Secret)
             $hash = $hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($signString))
-            $sign = [Convert]::ToBase64String($hash)
             $body.timestamp = $timestamp
-            $body.sign = $sign
+            $body.sign = [Convert]::ToBase64String($hash)
         }
 
-        $headers = @{ "Content-Type" = "application/json" }
-        Invoke-RestMethod -Uri $Webhook -Method POST -Headers $headers -Body ($body | ConvertTo-Json) -TimeoutSec 10 | Out-Null
+        Invoke-RestMethod -Uri $Webhook -Method POST -Headers @{"Content-Type"="application/json"} -Body ($body | ConvertTo-Json) -TimeoutSec 10 | Out-Null
     } catch {}
 }
 
@@ -164,10 +154,10 @@ function Build-NotifyMessage {
 # ===================== DDNS 核心逻辑 =====================
 
 function Invoke-DdnsUpdate {
-    Write-Info "===== DDNS 更新开始 ====="
+    Add-Content -Path $LogPath -Value "===== DDNS 更新开始 ====="
     $config = Read-Config
     if (-not $config -or [string]::IsNullOrEmpty($config.API_Token)) {
-        Write-Error "配置文件不存在或未配置 API Token，请先运行 ddns.ps1 进行配置"
+        Add-Content -Path $LogPath -Value "[ERROR] 配置文件不存在或未配置 API Token"
         return
     }
 
@@ -175,66 +165,63 @@ function Invoke-DdnsUpdate {
     $newIPv6 = $null
     if ($config.ipv6_set -eq "true") { $newIPv6 = Get-PublicIPv6 }
 
-    Write-Info "当前公网 IPv4: $newIPv4"
-    if ($newIPv6) { Write-Info "当前公网 IPv6: $newIPv6" }
+    Add-Content -Path $LogPath -Value "[INFO] 当前公网 IPv4: $newIPv4"
+    if ($newIPv6) { Add-Content -Path $LogPath -Value "[INFO] 当前公网 IPv6: $newIPv6" }
 
     $oldIPv4 = $config.Public_IPv4
     $oldIPv6 = $config.Public_IPv6
     $changed = $false
 
-    # 更新 IPv4
     if ($newIPv4 -and $config.Domains -and $config.Domains.Count -gt 0) {
         foreach ($domain in $config.Domains) {
             $zoneId = Get-CfZoneId -Domain $domain -Token $config.API_Token
-            if (-not $zoneId) { Write-Error "未找到 $domain 对应的 Zone，请检查 API Token 权限"; continue }
+            if (-not $zoneId) { Add-Content -Path $LogPath -Value "[ERROR] 未找到 $domain 对应的 Zone"; continue }
 
             $recordId = Get-CfDnsRecordId -ZoneId $zoneId -Type "A" -Name $domain -Token $config.API_Token
-            if (-not $recordId) { Write-Warn "未找到 $domain 的 A 记录，请先在 Cloudflare 控制面板添加"; continue }
+            if (-not $recordId) { Add-Content -Path $LogPath -Value "[WARN] 未找到 $domain 的 A 记录"; continue }
 
             $ok = Update-CfDnsRecord -ZoneId $zoneId -RecordId $recordId -Type "A" -Name $domain -Content $newIPv4 -Token $config.API_Token
-            if ($ok) { Write-Info "$domain -> $newIPv4 更新成功" } else { Write-Error "$domain -> $newIPv4 更新失败" }
+            if ($ok) { Add-Content -Path $LogPath -Value "[INFO] $domain -> $newIPv4 更新成功" } else { Add-Content -Path $LogPath -Value "[ERROR] $domain -> $newIPv4 更新失败" }
         }
         if ($newIPv4 -ne $oldIPv4) { $changed = $true; $config.Public_IPv4 = $newIPv4 }
     }
 
-    # 更新 IPv6
     if ($config.ipv6_set -eq "true" -and $newIPv6 -and $config.Domainsv6 -and $config.Domainsv6.Count -gt 0) {
         foreach ($domain in $config.Domainsv6) {
             $zoneId = Get-CfZoneId -Domain $domain -Token $config.API_Token
-            if (-not $zoneId) { Write-Error "未找到 $domain 对应的 Zone，请检查 API Token 权限"; continue }
+            if (-not $zoneId) { Add-Content -Path $LogPath -Value "[ERROR] 未找到 $domain 对应的 Zone"; continue }
 
             $recordId = Get-CfDnsRecordId -ZoneId $zoneId -Type "AAAA" -Name $domain -Token $config.API_Token
-            if (-not $recordId) { Write-Warn "未找到 $domain 的 AAAA 记录，请先在 Cloudflare 控制面板添加"; continue }
+            if (-not $recordId) { Add-Content -Path $LogPath -Value "[WARN] 未找到 $domain 的 AAAA 记录"; continue }
 
             $ok = Update-CfDnsRecord -ZoneId $zoneId -RecordId $recordId -Type "AAAA" -Name $domain -Content $newIPv6 -Token $config.API_Token
-            if ($ok) { Write-Info "$domain -> $newIPv6 更新成功" } else { Write-Error "$domain -> $newIPv6 更新失败" }
+            if ($ok) { Add-Content -Path $LogPath -Value "[INFO] $domain -> $newIPv6 更新成功" } else { Add-Content -Path $LogPath -Value "[ERROR] $domain -> $newIPv6 更新失败" }
         }
         if ($newIPv6 -ne $oldIPv6) { $changed = $true; $config.Public_IPv6 = $newIPv6 }
     }
 
-    # 发送通知
     if ($changed) {
         $msg = Build-NotifyMessage -Config $config -OldIPv4 $oldIPv4 -NewIPv4 $newIPv4 -OldIPv6 $oldIPv6 -NewIPv6 $newIPv6
 
         if ($config.Telegram_Bot_Token -and $config.Telegram_Chat_ID) {
             Send-Telegram -BotToken $config.Telegram_Bot_Token -ChatId $config.Telegram_Chat_ID -Message $msg
-            Write-Info "Telegram 通知已发送"
+            Add-Content -Path $LogPath -Value "[INFO] Telegram 通知已发送"
         }
         if ($config.Feishu_Webhook) {
             Send-Feishu -Webhook $config.Feishu_Webhook -Secret $config.Feishu_Secret -Message $msg
-            Write-Info "飞书通知已发送"
+            Add-Content -Path $LogPath -Value "[INFO] 飞书通知已发送"
         }
     }
 
-    Save-Config $config
-    Write-Info "===== DDNS 更新完成 ====="
+    $config | ConvertTo-Json -Depth 3 | Set-Content $ConfigPath -Encoding UTF8
+    Add-Content -Path $LogPath -Value "===== DDNS 更新完成 ====="
 }
 
 # ===================== 交互配置 =====================
 
 function Set-CloudflareApi {
     Write-Host "`n========== Cloudflare API 配置 ==========" -ForegroundColor Cyan
-    $token = Read-Host "请输入您的 Cloudflare API Token（在 Cloudflare 控制面板 -> 我的资料 -> API 令牌 中获取）"
+    $token = Read-Host "请输入您的 Cloudflare API Token"
     if ([string]::IsNullOrEmpty($token)) { Write-Error "API Token 不能为空"; return }
 
     $config = Read-Config
@@ -315,176 +302,80 @@ function Set-FeishuSettings {
     Write-Host "飞书配置已保存" -ForegroundColor Green
 }
 
-# ===================== 定时任务管理 =====================
+# ===================== NSSM 服务管理 =====================
 
-function Install-ScheduledDdns {
-    $taskName = "CloudflareDDNS"
-
-    # 生成运行时脚本
-    $runContent = @"
-`$ConfigPath = Join-Path `$env:USERPROFILE ".ddns\config.json"
-
-function Get-PublicIPv4 {
-    `$urls = @("https://api.ipify.org", "https://ip.sb", "https://ipv4.icanhazip.com")
-    foreach (`$url in `$urls) {
-        try { `$ip = (Invoke-RestMethod -Uri `$url -TimeoutSec 5).Trim(); if (`$ip -match '^(\d{1,3}\.){3}\d{1,3}$') { return `$ip } } catch {}
-    }
-    return `$null
-}
-
-function Get-PublicIPv6 {
-    `$urls = @("https://api6.ipify.org", "https://ip.sb")
-    foreach (`$url in `$urls) {
-        try { `$result = Invoke-RestMethod -Uri `$url -TimeoutSec 5; `$ip = `$result.Trim(); if (`$ip -match '^([0-9a-fA-F]{1,4}:){1,}[0-9a-fA-F]{0,4}') { return `$ip } } catch {}
-    }
-    return `$null
-}
-
-function Get-CfZoneId {
-    param([string]`$Domain, [string]`$Token)
+function Test-NssmInstalled {
     try {
-        `$headers = @{ "Authorization" = "Bearer `$Token"; "Content-Type" = "application/json" }
-        `$resp = Invoke-RestMethod -Uri "https://api.cloudflare.com/client/v4/zones" -Headers `$headers -TimeoutSec 10
-        if (-not `$resp.success) { return `$null }
-        `$sorted = `$resp.result | Sort-Object { `$_.name.Length } -Descending
-        foreach (`$zone in `$sorted) {
-            if (`$Domain -eq `$zone.name -or `$Domain.EndsWith("." + `$zone.name)) { return `$zone.id }
-        }
-    } catch {}
-    return `$null
-}
-
-function Get-CfDnsRecordId {
-    param([string]`$ZoneId, [string]`$Type, [string]`$Name, [string]`$Token)
-    try {
-        `$headers = @{ "Authorization" = "Bearer `$Token"; "Content-Type" = "application/json" }
-        `$uri = "https://api.cloudflare.com/client/v4/zones/`$ZoneId/dns_records?type=`$Type&name=`$Name"
-        `$resp = Invoke-RestMethod -Uri `$uri -Headers `$headers -TimeoutSec 10
-        if (`$resp.success -and `$resp.result.Count -gt 0) { return `$resp.result[0].id }
-    } catch {}
-    return `$null
-}
-
-function Update-CfDnsRecord {
-    param([string]`$ZoneId, [string]`$RecordId, [string]`$Type, [string]`$Name, [string]`$Content, [string]`$Token)
-    try {
-        `$headers = @{ "Authorization" = "Bearer `$Token"; "Content-Type" = "application/json" }
-        `$body = @{ type = `$Type; name = `$Name; content = `$Content } | ConvertTo-Json
-        `$uri = "https://api.cloudflare.com/client/v4/zones/`$ZoneId/dns_records/`$RecordId"
-        `$resp = Invoke-RestMethod -Uri `$uri -Method PUT -Headers `$headers -Body `$body -TimeoutSec 10
-        return `$resp.success
-    } catch { return `$false }
-}
-
-function Send-Telegram {
-    param([string]`$BotToken, [string]`$ChatId, [string]`$Message)
-    try {
-        `$uri = "https://api.telegram.org/bot`$BotToken/sendMessage"
-        `$body = @{ chat_id = `$ChatId; text = `$Message } | ConvertTo-Json
-        Invoke-RestMethod -Uri `$uri -Method POST -Headers @{"Content-Type"="application/json"} -Body `$body -TimeoutSec 10 | Out-Null
-    } catch {}
-}
-
-function Send-Feishu {
-    param([string]`$Webhook, [string]`$Secret, [string]`$Message)
-    try {
-        `$body = @{ msg_type = "text"; content = @{ text = `$Message } }
-        if (-not [string]::IsNullOrEmpty(`$Secret)) {
-            `$timestamp = [Math]::Floor([DateTime]::UtcNow.Subtract([DateTime]"1970-01-01").TotalSeconds).ToString()
-            `$signString = "`$timestamp`n`$Secret"
-            `$hmac = New-Object System.Security.Cryptography.HMACSHA256
-            `$hmac.Key = [Text.Encoding]::UTF8.GetBytes(`$Secret)
-            `$hash = `$hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes(`$signString))
-            `$body.timestamp = `$timestamp
-            `$body.sign = [Convert]::ToBase64String(`$hash)
-        }
-        Invoke-RestMethod -Uri `$Webhook -Method POST -Headers @{"Content-Type"="application/json"} -Body (`$body | ConvertTo-Json) -TimeoutSec 10 | Out-Null
-    } catch {}
-}
-
-if (-not (Test-Path `$ConfigPath)) { exit }
-`$config = Get-Content `$ConfigPath -Raw | ConvertFrom-Json
-if (-not `$config -or [string]::IsNullOrEmpty(`$config.API_Token)) { exit }
-
-`$newIPv4 = Get-PublicIPv4
-`$newIPv6 = `$null
-if (`$config.ipv6_set -eq "true") { `$newIPv6 = Get-PublicIPv6 }
-
-`$oldIPv4 = `$config.Public_IPv4
-`$oldIPv6 = `$config.Public_IPv6
-`$changed = `$false
-
-if (`$newIPv4 -and `$config.Domains -and `$config.Domains.Count -gt 0) {
-    foreach (`$domain in `$config.Domains) {
-        `$zoneId = Get-CfZoneId -Domain `$domain -Token `$config.API_Token
-        if (-not `$zoneId) { continue }
-        `$recordId = Get-CfDnsRecordId -ZoneId `$zoneId -Type "A" -Name `$domain -Token `$config.API_Token
-        if (-not `$recordId) { continue }
-        Update-CfDnsRecord -ZoneId `$zoneId -RecordId `$recordId -Type "A" -Name `$domain -Content `$newIPv4 -Token `$config.API_Token | Out-Null
-    }
-    if (`$newIPv4 -ne `$oldIPv4) { `$changed = `$true; `$config.Public_IPv4 = `$newIPv4 }
-}
-
-if (`$config.ipv6_set -eq "true" -and `$newIPv6 -and `$config.Domainsv6 -and `$config.Domainsv6.Count -gt 0) {
-    foreach (`$domain in `$config.Domainsv6) {
-        `$zoneId = Get-CfZoneId -Domain `$domain -Token `$config.API_Token
-        if (-not `$zoneId) { continue }
-        `$recordId = Get-CfDnsRecordId -ZoneId `$zoneId -Type "AAAA" -Name `$domain -Token `$config.API_Token
-        if (-not `$recordId) { continue }
-        Update-CfDnsRecord -ZoneId `$zoneId -RecordId `$recordId -Type "AAAA" -Name `$domain -Content `$newIPv6 -Token `$config.API_Token | Out-Null
-    }
-    if (`$newIPv6 -ne `$oldIPv6) { `$changed = `$true; `$config.Public_IPv6 = `$newIPv6 }
-}
-
-if (`$changed) {
-    `$parts = @()
-    if (`$config.Domains) { `$parts += (`$config.Domains -join " ") }
-    if (`$newIPv4 -and `$newIPv4 -ne `$oldIPv4) { `$parts += "IPv4更新 `$oldIPv4 -> `$newIPv4" }
-    if (`$config.ipv6_set -and `$newIPv6 -and `$newIPv6 -ne `$oldIPv6) {
-        if (`$config.Domainsv6 -and (`$config.Domains -join "") -ne (`$config.Domainsv6 -join "")) { `$parts += (`$config.Domainsv6 -join " ") }
-        `$parts += "IPv6更新 `$oldIPv6 -> `$newIPv6"
-    }
-    `$msg = `$parts -join " 。"
-    if (`$config.Telegram_Bot_Token -and `$config.Telegram_Chat_ID) { Send-Telegram -BotToken `$config.Telegram_Bot_Token -ChatId `$config.Telegram_Chat_ID -Message `$msg }
-    if (`$config.Feishu_Webhook) { Send-Feishu -Webhook `$config.Feishu_Webhook -Secret `$config.Feishu_Secret -Message `$msg }
-}
-
-`$config | ConvertTo-Json -Depth 3 | Set-Content `$ConfigPath -Encoding UTF8
-"@
-
-    $dir = Split-Path $RunScriptPath -Parent
-    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    $runContent | Set-Content $RunScriptPath -Encoding UTF8
-
-    # 创建计划任务
-    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$RunScriptPath`""
-    $trigger1 = New-ScheduledTaskTrigger -Daily -At "00:00" -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration ([TimeSpan]::MaxValue)
-    $trigger2 = New-ScheduledTaskTrigger -AtStartup
-    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-
-    try {
-        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger @($trigger1, $trigger2) -Principal $principal -Force
-        Write-Host "`n计划任务已创建：" -ForegroundColor Green
-        Write-Host "  任务名称: $taskName"
-        Write-Host "  触发器1: 每 5 分钟运行一次"
-        Write-Host "  触发器2: 开机时运行"
-        Write-Host "`n可以在任务计划程序库中查看和管理" -ForegroundColor Cyan
+        $nssm = Get-Command nssm.exe -ErrorAction SilentlyContinue
+        if ($nssm) { return $true }
+        $nssm = Get-Item "${env:ProgramFiles}\nssm\nssm.exe" -ErrorAction SilentlyContinue
+        if ($nssm) { return $true }
+        $nssm = Get-Item "${env:ProgramFiles(x86)}\nssm\nssm.exe" -ErrorAction SilentlyContinue
+        if ($nssm) { return $true }
+        return $false
     } catch {
-        Write-Error "创建计划任务失败: $_"
-        Write-Host "请尝试以管理员身份运行 PowerShell" -ForegroundColor Yellow
+        return $false
     }
 }
 
-function Remove-ScheduledDdns {
-    $taskName = "CloudflareDDNS"
-    try {
-        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-        Write-Host "计划任务已删除" -ForegroundColor Green
-
-        if (Test-Path $RunScriptPath) { Remove-Item $RunScriptPath -Force }
-    } catch {
-        Write-Error "删除计划任务失败: $_"
+function Install-DdnsService {
+    if (-not (Test-NssmInstalled)) {
+        Write-Error "未检测到 nssm.exe，请先安装 NSSM (https://nssm.cc/download)"
+        Write-Host "安装后请确保 nssm.exe 在 PATH 环境变量中" -ForegroundColor Yellow
+        return
     }
+
+    $psPath = (Get-Command powershell.exe).Source
+    $scriptPath = $MyInvocation.MyCommand.Path
+    if ([string]::IsNullOrEmpty($scriptPath)) {
+        $scriptPath = "$env:USERPROFILE\ddns.ps1"
+    }
+
+    Write-Host "正在安装 Windows 服务..." -ForegroundColor Cyan
+
+    # 删除已存在的服务
+    $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if ($existing) {
+        nssm.exe stop $ServiceName confirm
+        nssm.exe remove $ServiceName confirm
+        Start-Sleep -Seconds 2
+    }
+
+    # 注册服务
+    nssm.exe install $ServiceName $psPath "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -Run"
+    Start-Sleep -Seconds 1
+
+    # 设置服务参数 - 每5分钟循环运行
+    nssm.exe set $ServiceName AppParameters "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -Run"
+    nssm.exe set $ServiceName AppStdout "$env:USERPROFILE\.ddns\nssm_stdout.log" 2>$null
+    nssm.exe set $ServiceName AppStderr "$env:USERPROFILE\.ddns\nssm_stderr.log" 2>$null
+    nssm.exe set $ServiceName AppRotateFiles 1
+    nssm.exe set $ServiceName AppRotateOnline 1
+    nssm.exe set $ServiceName AppRotateSeconds 86400
+    nssm.exe set $ServiceName Start SERVICE_AUTO_START
+    nssm.exe set $ServiceName ObjectName LocalSystem
+
+    Start-Sleep -Seconds 1
+    nssm.exe start $ServiceName
+
+    Write-Host "`n服务已创建并启动！" -ForegroundColor Green
+    Write-Host "  服务名称: $ServiceName" -ForegroundColor Cyan
+    Write-Host "  services.msc 中可查看和管理" -ForegroundColor Cyan
+    Write-Host "  日志文件: $env:USERPROFILE\.ddns\ddns.log" -ForegroundColor Cyan
+}
+
+function Remove-DdnsService {
+    $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if (-not $existing) {
+        Write-Host "服务 $ServiceName 不存在" -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host "正在卸载服务..." -ForegroundColor Cyan
+    nssm.exe stop $ServiceName confirm
+    Start-Sleep -Seconds 2
+    nssm.exe remove $ServiceName confirm
+    Write-Host "服务 $ServiceName 已卸载" -ForegroundColor Green
 }
 
 # ===================== 菜单 =====================
@@ -492,16 +383,20 @@ function Remove-ScheduledDdns {
 function Show-Menu {
     Clear-Host
     Write-Host "######################################" -ForegroundColor Green
-    Write-Host "#   Cloudflare DDNS (Windows版)     #" -ForegroundColor Green
-    Write-Host "#                                    #" -ForegroundColor Green
+    Write-Host "#   Cloudflare DDNS (Windows 版)     #" -ForegroundColor Green
     Write-Host "######################################" -ForegroundColor Green
     Write-Host ""
 
-    $config = Read-Config
-    if ($config -and $config.API_Token) {
-        Write-Host "[信息] DDNS 已配置" -ForegroundColor Green
+    $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if ($service -and $service.Status -eq "Running") {
+        Write-Host "[信息] DDNS 服务: 已安装并运行中" -ForegroundColor Green
+        $config = Read-Config
+        if ($config -and $config.API_Token) { Write-Host "[信息] API Token: 已配置" -ForegroundColor Green }
+        else { Write-Host "[提示] API Token: 未配置" -ForegroundColor Yellow }
+    } elseif ($service) {
+        Write-Host "[提示] DDNS 服务: 已安装但未运行" -ForegroundColor Yellow
     } else {
-        Write-Host "[提示] DDNS 未配置，请首先配置 Cloudflare API Token" -ForegroundColor Yellow
+        Write-Host "[提示] DDNS 服务: 未安装" -ForegroundColor Yellow
     }
 
     Write-Host "`n请选择一个选项："
@@ -511,8 +406,8 @@ function Show-Menu {
     Write-Host "  " -NoNewline; Write-Host "3" -ForegroundColor Green -NoNewline; Write-Host "：配置要解析的域名"
     Write-Host "  " -NoNewline; Write-Host "4" -ForegroundColor Green -NoNewline; Write-Host "：配置 Telegram 通知"
     Write-Host "  " -NoNewline; Write-Host "5" -ForegroundColor Green -NoNewline; Write-Host "：配置飞书通知"
-    Write-Host "  " -NoNewline; Write-Host "6" -ForegroundColor Green -NoNewline; Write-Host "：安装计划任务（每5分钟运行 + 开机自启）"
-    Write-Host "  " -NoNewline; Write-Host "7" -ForegroundColor Green -NoNewline; Write-Host "：卸载计划任务"
+    Write-Host "  " -NoNewline; Write-Host "6" -ForegroundColor Green -NoNewline; Write-Host "：安装 NSSM 服务（开机自启 + 持续运行）"
+    Write-Host "  " -NoNewline; Write-Host "7" -ForegroundColor Red -NoNewline; Write-Host "：卸载 NSSM 服务"
 
     $opt = Read-Host "`n选项"
     switch ($opt) {
@@ -522,8 +417,8 @@ function Show-Menu {
         "3" { Set-Domain; pause }
         "4" { Set-TelegramSettings; pause }
         "5" { Set-FeishuSettings; pause }
-        "6" { Install-ScheduledDdns; pause }
-        "7" { Remove-ScheduledDdns; pause }
+        "6" { Install-DdnsService; pause }
+        "7" { Remove-DdnsService; pause }
         default { Show-Menu }
     }
     Show-Menu
@@ -537,12 +432,12 @@ if ($Run) {
 }
 
 if ($Install) {
-    Install-ScheduledDdns
+    Install-DdnsService
     exit
 }
 
 if ($Uninstall) {
-    Remove-ScheduledDdns
+    Remove-DdnsService
     exit
 }
 
@@ -559,8 +454,8 @@ if (-not $config -or [string]::IsNullOrEmpty($config.API_Token)) {
     $yn = Read-Host "是否配置飞书通知？(y/n)"
     if ($yn -eq 'y') { Set-FeishuSettings }
 
-    $yn = Read-Host "`n是否安装计划任务（每5分钟运行 + 开机自启）？(y/n)"
-    if ($yn -eq 'y') { Install-ScheduledDdns }
+    $yn = Read-Host "`n是否安装 NSSM 服务（开机自启 + 持续运行）？(y/n)"
+    if ($yn -eq 'y') { Install-DdnsService }
 
     Write-Host "`n配置完成！" -ForegroundColor Green
     Write-Host "提示：以后运行 ddns.ps1 可呼出菜单" -ForegroundColor Cyan
