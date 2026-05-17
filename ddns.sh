@@ -80,6 +80,27 @@ check_curl() {
             echo -e "${GREEN}GNU grep 已经安装。${NC}"
         fi
     fi
+
+    # 检查是否安装 openssl（飞书签名校验需要）
+    if ! command -v openssl &>/dev/null; then
+        echo -e "${YELLOW}未检测到 openssl，正在安装 openssl...${NC}"
+
+        if grep -qiE "debian|ubuntu" /etc/os-release; then
+            apt update
+            apt install -y openssl
+            if [ $? -ne 0 ]; then
+                echo -e "${RED}在 Debian/Ubuntu 上安装 openssl 失败，请手动安装后重新运行脚本。${NC}"
+                exit 1
+            fi
+        elif grep -qiE "alpine" /etc/os-release; then
+            apk update
+            apk add openssl
+            if [ $? -ne 0 ]; then
+                echo -e "${RED}在 Alpine 上安装 openssl 失败，请手动安装后重新运行脚本。${NC}"
+                exit 1
+            fi
+        fi
+    fi
 }
 
 # 开始安装DDNS
@@ -148,6 +169,11 @@ if [[ -n "$Telegram_Bot_Token" && -n "$Telegram_Chat_ID" && (("$Public_IPv4" != 
     send_telegram_notification
 fi
 
+# 发送飞书通知
+if [[ -n "$Feishu_Webhook" && (("$Public_IPv4" != "$Old_Public_IPv4" && -n "$Public_IPv4") || ("$Public_IPv6" != "$Old_Public_IPv6" && -n "$Public_IPv6")) ]]; then
+    send_feishu_notification
+fi
+
 # 延迟3秒
 sleep 3
 
@@ -171,6 +197,11 @@ API_Token="your_api_token"                         # 你的 Cloudflare API 令�
 # Telegram Bot Token 和 Chat ID
 Telegram_Bot_Token=""
 Telegram_Chat_ID=""
+
+# 飞书 Webhook 地址
+Feishu_Webhook=""
+# 飞书签名密钥（如启用签名校验则填写，不填则不签名）
+Feishu_Secret=""
 
 # 获取公网IP地址
 regex_pattern='^(eth|ens|eno|esp|enp)[0-9]+'
@@ -278,6 +309,41 @@ send_telegram_notification() {
         -d "text=$message"
 }
 
+# 发送飞书通知函数
+send_feishu_notification() {
+    local message=""
+    local body=""
+
+    for domain in "${Domains[@]}"; do
+        message+="$domain "
+    done
+
+    message+="IPv4更新 $Old_Public_IPv4 -> $Public_IPv4 。"
+
+    if [ "$ipv6_set" == "true" ]; then
+        if [ "${Domains[*]}" != "${Domainsv6[*]}" ]; then
+            for domainv6 in "${Domainsv6[@]}"; do
+                message+="$domainv6 "
+            done
+        fi
+        message+="IPv6更新 $Old_Public_IPv6 -> $Public_IPv6 。"
+    fi
+
+    body="{\"msg_type\":\"text\",\"content\":{\"text\":\"$message\"}"
+
+    if [ -n "$Feishu_Secret" ]; then
+        local timestamp=$(date +%s)
+        local sign=$(echo -n "${timestamp}\n${Feishu_Secret}" | openssl dgst -sha256 -hmac "$Feishu_Secret" -binary | openssl base64 -A)
+        body="${body},\"timestamp\":\"${timestamp}\",\"sign\":\"${sign}\""
+    fi
+
+    body="${body}}"
+
+    curl -s -X POST "$Feishu_Webhook" \
+        -H "Content-Type: application/json" \
+        --data "$body" >/dev/null 2>&1
+}
+
 EOF
     chmod +x /etc/DDNS/DDNS && chmod +x /etc/DDNS/.config
     echo -e "${Info}DDNS 安装完成！"
@@ -318,11 +384,12 @@ go_ahead(){
   ${GREEN}4${NC}：修改要解析的域名
   ${GREEN}5${NC}：配置 Cloudflare API Token
   ${GREEN}6${NC}：配置 Telegram 通知
-  ${GREEN}7${NC}：更改 DDNS 运行时间"  # 添加新选项
+  ${GREEN}7${NC}：更改 DDNS 运行时间
+  ${GREEN}8${NC}：配置飞书通知"
     echo
     read -p "选项: " option
-    until [[ "$option" =~ ^[0-7]$ ]]; do  # 更新有效选项范围
-        echo -e "${Error}请输入正确的数字 [0-7]"
+    until [[ "$option" =~ ^[0-8]$ ]]; do
+        echo -e "${Error}请输入正确的数字 [0-8]"
         echo
         exit 1
     done
@@ -375,8 +442,12 @@ go_ahead(){
             check_ddns_install
         ;;
         7)
-            set_ddns_run_interval  # 调用新函数以更改 DDNS 运行时间
+            set_ddns_run_interval
             sleep 2
+            check_ddns_install
+        ;;
+        8)
+            set_feishu_settings
             check_ddns_install
         ;;
     esac
@@ -505,6 +576,40 @@ set_telegram_settings(){
         echo -e "${Info}已跳过设置Telegram Bot Token和Chat ID"
         echo
         return  # 如果没有输入 Token，则直接返回，跳过设置 Chat ID 的步骤
+    fi
+}
+
+# 设置飞书通知
+set_feishu_settings(){
+    echo -e "${Info}开始配置飞书通知设置..."
+    echo
+
+    echo -e "${Tip}请输入您的飞书机器人 Webhook 地址，如果不使用飞书通知请直接按 Enter 跳过"
+    echo -e "${YELLOW}在飞书群组 -> 设置 -> 群机器人 -> 添加机器人 -> 自定义机器人 中获取 Webhook 地址${NC}"
+    read -rp "Webhook: " Webhook
+    if [ -n "$Webhook" ]; then
+        FEISHU_WEBHOOK="$Webhook"
+        echo -e "${Info}你的飞书 Webhook：${RED_ground}${FEISHU_WEBHOOK}${NC}"
+        echo
+
+        echo -e "${Tip}请输入您的飞书机器人签名密钥（Secret），如果不启用签名校验请直接按 Enter 跳过"
+        echo -e "${YELLOW}在飞书机器人设置 -> 安全设置 -> 签名校验 中获取${NC}"
+        read -rp "Secret: " Secret
+        if [ -n "$Secret" ]; then
+            FEISHU_SECRET="$Secret"
+            echo -e "${Info}已启用飞书签名校验"
+            echo
+            sed -i 's|^#\?Feishu_Secret=".*"|Feishu_Secret="'"${FEISHU_SECRET}"'"|g' /etc/DDNS/.config
+        else
+            echo -e "${Info}未启用飞书签名校验"
+            echo
+            sed -i 's|^#\?Feishu_Secret=".*"|Feishu_Secret=""|g' /etc/DDNS/.config
+        fi
+
+        sed -i 's|^#\?Feishu_Webhook=".*"|Feishu_Webhook="'"${FEISHU_WEBHOOK}"'"|g' /etc/DDNS/.config
+    else
+        echo -e "${Info}已跳过设置飞书通知"
+        echo
     fi
 }
 
@@ -667,6 +772,7 @@ check_ddns_install(){
         set_cloudflare_api
         set_domain
         set_telegram_settings
+        set_feishu_settings
         run_ddns
         echo -e "${Info}执行 ${GREEN}ddns${NC} 可呼出菜单！"
     else

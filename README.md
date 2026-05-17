@@ -8,7 +8,7 @@
 - 使用 Cloudflare API Token 认证（无需 Global Key）
 - **任意域名自动匹配 Zone** — 无需手动指定根域名
 - 支持多域名同时解析
-- 支持 Telegram 通知推送
+- 支持 Telegram 和飞书双通道通知推送
 - 可自定义更新间隔时间
 - 支持 systemd（Debian/Ubuntu）和 cron（Alpine）两种定时方案
 
@@ -46,6 +46,7 @@ ddns
 5：配置 Cloudflare API Token
 6：配置 Telegram 通知
 7：更改 DDNS 运行时间
+8：配置飞书通知
 ```
 
 ### 配置 Cloudflare API Token
@@ -80,6 +81,29 @@ IPv4域名: example.com, blog.example.com
 - Bot Token：在 [@BotFather](https://t.me/BotFather) 创建机器人获取
 - Chat ID：向机器人发送任意消息后，访问 `https://api.telegram.org/bot<你的Token>/getUpdates` 获取
 
+### 飞书通知（可选）
+
+选择选项 `8`，输入飞书机器人 Webhook 地址：
+
+```
+请输入您的飞书机器人 Webhook 地址
+在飞书群组 -> 设置 -> 群机器人 -> 添加机器人 -> 自定义机器人 中获取 Webhook 地址
+Webhook:
+```
+
+如果开启了签名校验，还会提示输入 Secret：
+
+```
+请输入您的飞书机器人签名密钥（Secret）
+在飞书机器人设置 -> 安全设置 -> 签名校验 中获取
+Secret:
+```
+
+**获取方式：**
+1. 飞书群组 → 设置 → 群机器人 → 添加机器人 → 自定义机器人 → 复制 Webhook 地址
+2. 在机器人安全设置中开启**签名校验**，复制 Secret
+3. 配置时输入 Webhook 地址，Secret 可选（不填则不签名）
+
 ### 自定义更新间隔
 
 选择选项 `7`，输入分钟数：
@@ -99,6 +123,8 @@ Domainsv6=("ipv6.example.com")                 # IPv6 域名
 API_Token="your_api_token"                     # Cloudflare API 令牌
 Telegram_Bot_Token=""                          # Telegram Bot Token
 Telegram_Chat_ID=""                            # Telegram Chat ID
+Feishu_Webhook=""                              # 飞书 Webhook 地址
+Feishu_Secret=""                              # 飞书签名密钥（可选）
 ```
 
 ## 工作原理
@@ -107,7 +133,7 @@ Telegram_Chat_ID=""                            # Telegram Chat ID
 2. 调用 Cloudflare API 拉取所有域名区域，自动匹配域名对应的 Zone
 3. 查询现有 DNS 记录 ID
 4. 更新 DNS 记录为当前公网 IP
-5. IP 变化时发送 Telegram 通知（如果已配置）
+5. IP 变化时通过 Telegram 和/或飞书发送通知（如果已配置）
 
 ## 常见问题
 
