@@ -26,9 +26,9 @@ func main() {
 	}
 
 	cfg, _ := LoadConfig()
-	if cfg == nil || cfg.Provider == "" {
-		runWizard()
-		return
+	if cfg == nil {
+		cfg = &Config{}
+		SaveConfig(cfg)
 	}
 
 	showMenu()
