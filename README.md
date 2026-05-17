@@ -20,12 +20,14 @@
 
 ## 安装
 
-```bash
+bash
 # 下载脚本
-curl -o /usr/bin/ddns https://raw.githubusercontent.com/semgooder/sem-ddns/main/ddns.sh
-chmod +x /usr/bin/ddns
+```
+sudo curl -o /usr/bin/ddns https://raw.githubusercontent.com/semgooder/sem-ddns/main/ddns.sh && sudo chmod +x /usr/bin/ddns && ddns
+```
 
 # 运行
+```
 ddns
 ```
 
