@@ -24,10 +24,13 @@ func RunUpdate() {
 		appendLog("[ERROR] 读取配置失败: " + err.Error())
 		return
 	}
-	if cfg.APIToken == "" {
-		appendLog("[ERROR] API Token 未配置")
+
+	provider, err := NewDNSProvider(cfg)
+	if err != nil {
+		appendLog("[ERROR] " + err.Error())
 		return
 	}
+
 	newIPv4 := GetPublicIPv4()
 	var newIPv6 string
 	if cfg.IPv6Set == "true" {
@@ -40,25 +43,19 @@ func RunUpdate() {
 	oldIPv4 := cfg.PublicIPv4
 	oldIPv6 := cfg.PublicIPv6
 	changed := false
+
 	if newIPv4 != "" && len(cfg.Domains) > 0 {
 		for _, domain := range cfg.Domains {
 			domain = strings.TrimSpace(domain)
 			if domain == "" {
 				continue
 			}
-			zoneID := cfGetZoneID(domain, cfg.APIToken)
-			if zoneID == "" {
-				appendLog(fmt.Sprintf("[ERROR] 未找到 %s 对应的 Zone", domain))
-				continue
-			}
-			recordID := cfGetDNSRecordID(zoneID, "A", domain, cfg.APIToken)
-			if recordID == "" {
-				appendLog(fmt.Sprintf("[WARN] 未找到 %s 的 A 记录", domain))
-				continue
-			}
-			ok := cfUpdateDNSRecord(zoneID, recordID, "A", domain, newIPv4, cfg.APIToken)
-			if ok {
+			ok, err := provider.UpdateRecord(domain, "A", newIPv4)
+			if err != nil {
+				appendLog(fmt.Sprintf("[ERROR] %s: %v", domain, err))
+			} else if ok {
 				appendLog(fmt.Sprintf("[INFO] %s -> %s 更新成功", domain, newIPv4))
+				changed = true
 			} else {
 				appendLog(fmt.Sprintf("[ERROR] %s -> %s 更新失败", domain, newIPv4))
 			}
@@ -68,25 +65,19 @@ func RunUpdate() {
 			cfg.PublicIPv4 = newIPv4
 		}
 	}
+
 	if cfg.IPv6Set == "true" && newIPv6 != "" && len(cfg.Domainsv6) > 0 {
 		for _, domain := range cfg.Domainsv6 {
 			domain = strings.TrimSpace(domain)
 			if domain == "" {
 				continue
 			}
-			zoneID := cfGetZoneID(domain, cfg.APIToken)
-			if zoneID == "" {
-				appendLog(fmt.Sprintf("[ERROR] 未找到 %s 对应的 Zone", domain))
-				continue
-			}
-			recordID := cfGetDNSRecordID(zoneID, "AAAA", domain, cfg.APIToken)
-			if recordID == "" {
-				appendLog(fmt.Sprintf("[WARN] 未找到 %s 的 AAAA 记录", domain))
-				continue
-			}
-			ok := cfUpdateDNSRecord(zoneID, recordID, "AAAA", domain, newIPv6, cfg.APIToken)
-			if ok {
+			ok, err := provider.UpdateRecord(domain, "AAAA", newIPv6)
+			if err != nil {
+				appendLog(fmt.Sprintf("[ERROR] %s: %v", domain, err))
+			} else if ok {
 				appendLog(fmt.Sprintf("[INFO] %s -> %s 更新成功", domain, newIPv6))
+				changed = true
 			} else {
 				appendLog(fmt.Sprintf("[ERROR] %s -> %s 更新失败", domain, newIPv6))
 			}
@@ -96,6 +87,7 @@ func RunUpdate() {
 			cfg.PublicIPv6 = newIPv6
 		}
 	}
+
 	if changed {
 		msg := buildNotifyMessage(cfg, oldIPv4, newIPv4, oldIPv6, newIPv6)
 		if cfg.TelegramBotToken != "" && cfg.TelegramChatID != "" {

@@ -26,7 +26,7 @@ func main() {
 	}
 
 	cfg, _ := LoadConfig()
-	if cfg == nil || cfg.APIToken == "" {
+	if cfg == nil || cfg.Provider == "" {
 		runWizard()
 		return
 	}
@@ -34,21 +34,67 @@ func main() {
 	showMenu()
 }
 
+func selectProvider(r *bufio.Reader) string {
+	fmt.Println("\n选择 DNS 服务商：")
+	fmt.Println("  1) Cloudflare")
+	fmt.Println("  2) DNSPod（独立版，使用 ID + Token）")
+	fmt.Println("  3) 腾讯云 DNSPod（API 3.0，使用 SecretId + SecretKey）")
+	fmt.Print("请选择 [1/2/3] (默认 1): ")
+	opt, _ := r.ReadString('\n')
+	opt = strings.TrimSpace(opt)
+	switch opt {
+	case "2":
+		return "dnspod"
+	case "3":
+		return "tencentcloud"
+	default:
+		return "cloudflare"
+	}
+}
+
 func runWizard() {
 	r := bufio.NewReader(os.Stdin)
-	fmt.Println("========== Cloudflare DDNS 配置向导 ==========")
+	fmt.Println("========== DDNS 配置向导 ==========")
 
 	var cfg Config
+	cfg.Provider = selectProvider(r)
 
-	fmt.Print("请输入您的 Cloudflare API Token: ")
-	token, _ := r.ReadString('\n')
-	cfg.APIToken = strings.TrimSpace(token)
-	if cfg.APIToken == "" {
-		fmt.Println("API Token 不能为空")
-		return
+	switch cfg.Provider {
+	case "dnspod":
+		fmt.Print("请输入 DNSPod ID: ")
+		id, _ := r.ReadString('\n')
+		cfg.DNSPodID = strings.TrimSpace(id)
+		fmt.Print("请输入 DNSPod Token: ")
+		tok, _ := r.ReadString('\n')
+		cfg.DNSPodToken = strings.TrimSpace(tok)
+		if cfg.DNSPodID == "" || cfg.DNSPodToken == "" {
+			fmt.Println("DNSPod ID 和 Token 不能为空")
+			return
+		}
+
+	case "tencentcloud":
+		fmt.Print("请输入腾讯云 SecretId: ")
+		id, _ := r.ReadString('\n')
+		cfg.SecretId = strings.TrimSpace(id)
+		fmt.Print("请输入腾讯云 SecretKey: ")
+		key, _ := r.ReadString('\n')
+		cfg.SecretKey = strings.TrimSpace(key)
+		if cfg.SecretId == "" || cfg.SecretKey == "" {
+			fmt.Println("SecretId 和 SecretKey 不能为空")
+			return
+		}
+
+	default:
+		fmt.Print("请输入 Cloudflare API Token: ")
+		token, _ := r.ReadString('\n')
+		cfg.APIToken = strings.TrimSpace(token)
+		if cfg.APIToken == "" {
+			fmt.Println("API Token 不能为空")
+			return
+		}
 	}
 
-	fmt.Println("检测公网 IP...")
+	fmt.Println("\n检测公网 IP...")
 	ipv4 := GetPublicIPv4()
 	if ipv4 != "" {
 		fmt.Printf("检测到公网 IPv4: %s\n", ipv4)
@@ -92,7 +138,7 @@ func runWizard() {
 		fmt.Println("未检测到 IPv6 地址，跳过")
 	}
 
-	fmt.Print("是否配置 Telegram 通知？(y/n): ")
+	fmt.Print("\n是否配置 Telegram 通知？(y/n): ")
 	yn, _ := r.ReadString('\n')
 	if strings.TrimSpace(strings.ToLower(yn)) == "y" {
 		fmt.Print("Telegram Bot Token: ")
@@ -118,7 +164,7 @@ func runWizard() {
 		fmt.Printf("保存配置失败: %v\n", err)
 		return
 	}
-	fmt.Println("配置已保存！")
+	fmt.Println("\n配置已保存！")
 
 	fmt.Print("是否安装 Windows 服务（开机自启）？(y/n): ")
 	yn, _ = r.ReadString('\n')
@@ -126,7 +172,7 @@ func runWizard() {
 		InstallServiceC()
 	}
 
-	fmt.Println("完成！运行程序可呼出菜单")
+	fmt.Println("\n完成！运行程序可呼出菜单")
 	pause()
 }
 
@@ -138,8 +184,8 @@ func showMenu() {
 		fmt.Println("######################################")
 		fmt.Println()
 
-		exe, _ := os.Executable()
-		fmt.Printf("当前程序: %s\n", exe)
+		cfg, _ := LoadConfig()
+		fmt.Printf("DNS 服务商: %s\n", providerDisplayName(cfg))
 		fmt.Printf("配置文件: %s\n", configPath())
 		fmt.Printf("日志文件: %s\n", logPath())
 		fmt.Println()
@@ -147,12 +193,13 @@ func showMenu() {
 		fmt.Println("请选择一个选项：")
 		fmt.Println("  0：退出")
 		fmt.Println("  1：立即执行 DDNS 更新")
-		fmt.Println("  2：配置 Cloudflare API Token")
-		fmt.Println("  3：配置要解析的域名")
-		fmt.Println("  4：配置 Telegram 通知")
-		fmt.Println("  5：配置飞书通知")
-		fmt.Println("  6：安装 Windows 服务（开机自启）")
-		fmt.Println("  7：卸载 Windows 服务")
+		fmt.Println("  2：切换 DNS 服务商")
+		fmt.Println("  3：配置 DNS 凭证")
+		fmt.Println("  4：配置要解析的域名")
+		fmt.Println("  5：配置 Telegram 通知")
+		fmt.Println("  6：配置飞书通知")
+		fmt.Println("  7：安装 Windows 服务（开机自启）")
+		fmt.Println("  8：卸载 Windows 服务")
 
 		fmt.Print("\n选项: ")
 		r := bufio.NewReader(os.Stdin)
@@ -170,15 +217,39 @@ func showMenu() {
 			if cfg == nil {
 				cfg = &Config{}
 			}
-			fmt.Print("请输入 Cloudflare API Token: ")
-			t, _ := r.ReadString('\n')
-			cfg.APIToken = strings.TrimSpace(t)
-			if cfg.APIToken != "" {
-				SaveConfig(cfg)
-				fmt.Println("已保存")
-			}
+			cfg.Provider = selectProvider(r)
+			SaveConfig(cfg)
+			fmt.Println("已切换")
 			pause()
 		case "3":
+			cfg, _ := LoadConfig()
+			if cfg == nil {
+				cfg = &Config{}
+			}
+			switch cfg.Provider {
+			case "dnspod":
+				fmt.Print("DNSPod ID: ")
+				id, _ := r.ReadString('\n')
+				cfg.DNSPodID = strings.TrimSpace(id)
+				fmt.Print("DNSPod Token: ")
+				tok, _ := r.ReadString('\n')
+				cfg.DNSPodToken = strings.TrimSpace(tok)
+			case "tencentcloud":
+				fmt.Print("SecretId: ")
+				id, _ := r.ReadString('\n')
+				cfg.SecretId = strings.TrimSpace(id)
+				fmt.Print("SecretKey: ")
+				key, _ := r.ReadString('\n')
+				cfg.SecretKey = strings.TrimSpace(key)
+			default:
+				fmt.Print("Cloudflare API Token: ")
+				t, _ := r.ReadString('\n')
+				cfg.APIToken = strings.TrimSpace(t)
+			}
+			SaveConfig(cfg)
+			fmt.Println("已保存")
+			pause()
+		case "4":
 			cfg, _ := LoadConfig()
 			if cfg == nil {
 				cfg = &Config{}
@@ -227,7 +298,7 @@ func showMenu() {
 			SaveConfig(cfg)
 			fmt.Println("已保存")
 			pause()
-		case "4":
+		case "5":
 			cfg, _ := LoadConfig()
 			if cfg == nil {
 				cfg = &Config{}
@@ -244,7 +315,7 @@ func showMenu() {
 				fmt.Println("已保存")
 			}
 			pause()
-		case "5":
+		case "6":
 			cfg, _ := LoadConfig()
 			if cfg == nil {
 				cfg = &Config{}
@@ -261,13 +332,29 @@ func showMenu() {
 				fmt.Println("已保存")
 			}
 			pause()
-		case "6":
+		case "7":
 			InstallServiceC()
 			pause()
-		case "7":
+		case "8":
 			UninstallServiceC()
 			pause()
 		}
+	}
+}
+
+func providerDisplayName(cfg *Config) string {
+	if cfg == nil {
+		return "未配置"
+	}
+	switch cfg.Provider {
+	case "dnspod":
+		return "DNSPod（独立版）"
+	case "tencentcloud":
+		return "腾讯云 DNSPod（API 3.0）"
+	case "cloudflare":
+		return "Cloudflare"
+	default:
+		return "未配置"
 	}
 }
 

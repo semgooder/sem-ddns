@@ -7,10 +7,22 @@ import (
 )
 
 type Config struct {
+	Provider string `json:"Provider"`
+
+	// Cloudflare
+	APIToken string `json:"API_Token"`
+
+	// DNSPod (独立版)
+	DNSPodID    string `json:"DNSPod_ID"`
+	DNSPodToken string `json:"DNSPod_Token"`
+
+	// 腾讯云 DNSPod (API 3.0)
+	SecretId  string `json:"SecretId"`
+	SecretKey string `json:"SecretKey"`
+
 	Domains         []string `json:"Domains"`
 	IPv6Set         string   `json:"ipv6_set"`
 	Domainsv6       []string `json:"Domainsv6"`
-	APIToken        string   `json:"API_Token"`
 	TelegramBotToken string  `json:"Telegram_Bot_Token"`
 	TelegramChatID  string   `json:"Telegram_Chat_ID"`
 	FeishuWebhook   string   `json:"Feishu_Webhook"`

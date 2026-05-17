@@ -5,7 +5,10 @@
 ## 功能特点
 
 - 支持 IPv4 和 IPv6 双栈解析
-- 使用 Cloudflare API Token 认证（无需 Global Key）
+- 支持三大 DNS 服务商：
+  - **Cloudflare**（API Token）
+  - **DNSPod 独立版**（ID + Token）
+  - **腾讯云 DNSPod**（SecretId + SecretKey，API 3.0）
 - **任意域名自动匹配 Zone** — 无需手动指定根域名
 - 支持多域名同时解析
 - 支持 Telegram 和飞书双通道通知推送（飞书支持 HMAC-SHA256 签名校验）
@@ -108,12 +111,13 @@ ddns.exe
 ```
 0：退出
 1：立即执行 DDNS 更新
-2：配置 Cloudflare API Token
-3：配置要解析的域名
-4：配置 Telegram 通知
-5：配置飞书通知
-6：安装 Windows 服务（开机自启）
-7：卸载 Windows 服务
+2：切换 DNS 服务商
+3：配置 DNS 凭证
+4：配置要解析的域名
+5：配置 Telegram 通知
+6：配置飞书通知
+7：安装 Windows 服务（开机自启）
+8：卸载 Windows 服务
 ```
 
 ### 命令行模式（无界面，适合自动化）
@@ -147,7 +151,12 @@ ddns config
 
 ```json
 {
+  "Provider": "cloudflare",
   "API_Token": "your_api_token",
+  "DNSPod_ID": "",
+  "DNSPod_Token": "",
+  "SecretId": "",
+  "SecretKey": "",
   "Domains": ["example.com", "blog.example.com"],
   "ipv6_set": "true",
   "Domainsv6": ["ipv6.example.com"],
@@ -157,6 +166,8 @@ ddns config
   "Feishu_Secret": ""
 }
 ```
+
+> `Provider` 可选值：`cloudflare`（默认）、`dnspod`、`tencentcloud`
 
 ## 日志
 
@@ -186,7 +197,10 @@ rm ddns
 | `ddns/main.go` | CLI 入口 + 交互菜单 |
 | `ddns/config.go` | JSON 配置读写 |
 | `ddns/ip.go` | 公网 IPv4/IPv6 检测 |
-| `ddns/cloudflare.go` | Cloudflare API 调用 |
+| `ddns/provider.go` | DNS 服务商接口定义 |
+| `ddns/cloudflare.go` | Cloudflare 实现 |
+| `ddns/dnspod.go` | DNSPod 独立版实现 |
+| `ddns/tencentcloud.go` | 腾讯云 DNSPod (API 3.0) 实现 |
 | `ddns/notify.go` | Telegram + 飞书通知 |
 | `ddns/updater.go` | DDNS 核心更新逻辑 |
 | `ddns/service_windows.go` | 原生 Windows 服务注册 |

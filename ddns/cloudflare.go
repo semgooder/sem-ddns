@@ -13,9 +13,13 @@ import (
 
 const cfAPI = "https://api.cloudflare.com/client/v4"
 
+type cloudflareProvider struct {
+	APIToken string
+}
+
 type cfResponse struct {
-	Success bool            `json:"success"`
-	Result  []cfZoneResult  `json:"result"`
+	Success bool           `json:"success"`
+	Result  []cfZoneResult `json:"result"`
 }
 
 type cfZoneResult struct {
@@ -23,22 +27,36 @@ type cfZoneResult struct {
 	Name string `json:"name"`
 }
 
-type cfDNSResult struct {
-	ID string `json:"id"`
+type cfDNSListResponse struct {
+	Success bool          `json:"success"`
+	Result  []cfDNSResult `json:"result"`
 }
 
-type cfDNSListResponse struct {
-	Success bool           `json:"success"`
-	Result  []cfDNSResult  `json:"result"`
+type cfDNSResult struct {
+	ID string `json:"id"`
 }
 
 type cfUpdateResponse struct {
 	Success bool `json:"success"`
 }
 
-func cfGetZoneID(domain, token string) string {
+func (p *cloudflareProvider) UpdateRecord(domain, recordType, value string) (bool, error) {
+	zoneID := p.getZoneID(domain)
+	if zoneID == "" {
+		return false, fmt.Errorf("未找到 %s 对应的 Zone", domain)
+	}
+
+	recordID := p.getDNSRecordID(zoneID, recordType, domain)
+	if recordID == "" {
+		return false, fmt.Errorf("未找到 %s 的 %s 记录", domain, recordType)
+	}
+
+	return p.updateDNSRecord(zoneID, recordID, recordType, domain, value), nil
+}
+
+func (p *cloudflareProvider) getZoneID(domain string) string {
 	req, _ := http.NewRequest("GET", cfAPI+"/zones", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+p.APIToken)
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -66,10 +84,10 @@ func cfGetZoneID(domain, token string) string {
 	return ""
 }
 
-func cfGetDNSRecordID(zoneID, recordType, name, token string) string {
+func (p *cloudflareProvider) getDNSRecordID(zoneID, recordType, name string) string {
 	url := fmt.Sprintf("%s/zones/%s/dns_records?type=%s&name=%s", cfAPI, zoneID, recordType, name)
 	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+p.APIToken)
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -87,7 +105,7 @@ func cfGetDNSRecordID(zoneID, recordType, name, token string) string {
 	return result.Result[0].ID
 }
 
-func cfUpdateDNSRecord(zoneID, recordID, recordType, name, content, token string) bool {
+func (p *cloudflareProvider) updateDNSRecord(zoneID, recordID, recordType, name, content string) bool {
 	payload := map[string]string{
 		"type":    recordType,
 		"name":    name,
@@ -97,7 +115,7 @@ func cfUpdateDNSRecord(zoneID, recordID, recordType, name, content, token string
 
 	url := fmt.Sprintf("%s/zones/%s/dns_records/%s", cfAPI, zoneID, recordID)
 	req, _ := http.NewRequest("PUT", url, bytes.NewReader(data))
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+p.APIToken)
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: 10 * time.Second}
