@@ -84,9 +84,6 @@ check_curl() {
 
 # 开始安装DDNS
 install_ddns(){
-    if [ ! -f "/usr/bin/ddns" ]; then
-        curl -o /usr/bin/ddns https://raw.githubusercontent.com/mocchen/cssmeihua/mochen/shell/ddns.sh && chmod +x /usr/bin/ddns
-    fi
     mkdir -p /etc/DDNS
     cat <<'EOF' > /etc/DDNS/DDNS
 #!/bin/bash
