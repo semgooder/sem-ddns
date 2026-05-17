@@ -20,7 +20,6 @@
 
 ## 安装
 
-bash
 # 下载脚本
 ```
 sudo curl -o /usr/bin/ddns https://raw.githubusercontent.com/semgooder/sem-ddns/main/ddns.sh && sudo chmod +x /usr/bin/ddns && ddns
