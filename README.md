@@ -1,6 +1,6 @@
 # Cloudflare DDNS
 
-支持 **Linux**（bash）和 **Windows**（PowerShell）的动态 DNS 解析工具，配合 Cloudflare API Token 自动更新域名解析记录。
+支持 **Linux**（bash）和 **Windows / Linux / macOS**（Go 编译版）的动态 DNS 解析工具。
 
 ## 功能特点
 
@@ -9,14 +9,13 @@
 - **任意域名自动匹配 Zone** — 无需手动指定根域名
 - 支持多域名同时解析
 - 支持 Telegram 和飞书双通道通知推送（飞书支持 HMAC-SHA256 签名校验）
-- Linux 版支持 systemd / cron 定时方案
-- Windows 版支持 NSSM 系统服务（开机自启 + 持续运行）
+- **Go 版**内置 Windows 服务，无需 NSSM，开机自启
+- **Go 版**跨平台编译，一个二进制到处运行
 
 ## 系统要求
 
-- **Linux**: Debian / Ubuntu / Alpine，需 root 权限
-- **Windows**: Windows 7+ / Windows Server 2012+（PowerShell 5.1+）
-- 需拥有 Cloudflare API Token（DNS 编辑权限）
+- **Linux 脚本版**: Debian / Ubuntu / Alpine，需 root 权限
+- **Go 版**: Windows 7+ / Linux / macOS，无需任何依赖
 
 ---
 
@@ -30,13 +29,9 @@ sudo chmod +x /usr/bin/ddns
 sudo ddns
 ```
 
-首次运行会自动创建配置文件并根据引导完成配置。
-
-## 使用指南
+首次运行会自动配置向导。之后参见主菜单管理。
 
 ### 主菜单
-
-运行 `ddns` 进入交互菜单：
 
 ```
 0：退出
@@ -50,78 +45,65 @@ sudo ddns
 8：配置飞书通知
 ```
 
-### 配置 Cloudflare API Token
-
-选择选项 `5`，输入你的 API Token：
-
-**Token 权限要求：**
-- `Zone / DNS / Edit`
-- `Zone / Zone / Read`
-
-### 配置域名
-
-选择选项 `4`，输入要解析的域名（多个用逗号分隔）。支持任意级别的域名，脚本会自动匹配对应的 Zone。
-
-### Telegram / 飞书通知
-
-分别对应选项 `6` 和 `8`，按提示输入 Bot Token / Chat ID 或 Webhook 地址即可。
-
-### 自定义更新间隔
-
-选择选项 `7`，输入分钟数。
-
-## 配置文件
+### 配置文件
 
 路径：`/etc/DDNS/.config`
 
-```bash
-Domains=("example.com" "blog.example.com")
-ipv6_set="true"
-Domainsv6=("ipv6.example.com")
-API_Token="your_api_token"
-Telegram_Bot_Token=""
-Telegram_Chat_ID=""
-Feishu_Webhook=""
-Feishu_Secret=""
-```
+### 卸载
 
-## 卸载
-
-菜单选 `3` 或手动：
-
-```bash
-# Debian/Ubuntu
-systemctl stop ddns.service ddns.timer
-rm -rf /etc/systemd/system/ddns.service /etc/systemd/system/ddns.timer /etc/DDNS /usr/bin/ddns
-
-# Alpine
-crontab -l | grep -v "/bin/bash /etc/DDNS/DDNS" | crontab -
-rm -rf /etc/DDNS /usr/bin/ddns
-```
+菜单选 `3` 或手动 `systemctl stop ddns.service ddns.timer` 后删除相关文件。
 
 ---
 
-# Windows 版 (PowerShell)
+# Go 版 (跨平台)
 
 ## 安装
 
-**前置要求：** 需要先安装 [NSSM (Non-Sucking Service Manager)](https://nssm.cc/download)，并将 `nssm.exe` 放入 PATH 或 `C:\nssm\nssm.exe`。
+### 预编译（Windows 推荐）
 
 ```powershell
-# 下载脚本到用户目录
-curl -o "$env:USERPROFILE\ddns.ps1" https://raw.githubusercontent.com/semgooder/sem-ddns/main/ddns.ps1
-
-# 首次运行（自动进入配置向导）
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\ddns.ps1"
+curl -o ddns.exe https://github.com/semgooder/sem-ddns/releases/latest/download/ddns-windows-amd64.exe
+.\ddns.exe
 ```
 
-> 如果遇到执行策略限制，先运行：`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
+### 自行编译
+
+需要 Go 1.21+ 环境：
+
+```bash
+git clone https://github.com/semgooder/sem-ddns.git
+cd sem-ddns/ddns
+
+# 编译当前平台
+go build -o ddns .
+
+# 交叉编译 Windows
+GOOS=windows GOARCH=amd64 go build -o ddns-windows-amd64.exe .
+
+# 交叉编译 Linux
+GOOS=linux GOARCH=amd64 go build -o ddns-linux-amd64 .
+
+# 交叉编译 macOS
+GOOS=darwin GOARCH=amd64 go build -o ddns-macos-amd64 .
+```
+
+### 首次运行
+
+直接执行，自动进入配置向导：
+
+```bash
+# Windows
+ddns.exe
+
+# Linux / macOS
+./ddns
+```
+
+交互式配置 API Token、域名、通知等。配置完成后可立即使用。
 
 ## 使用指南
 
 ### 交互菜单
-
-运行后显示菜单：
 
 ```
 0：退出
@@ -130,41 +112,38 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\ddns.ps1"
 3：配置要解析的域名
 4：配置 Telegram 通知
 5：配置飞书通知
-6：安装 NSSM 服务（开机自启 + 持续运行）
-7：卸载 NSSM 服务
+6：安装 Windows 服务（开机自启）
+7：卸载 Windows 服务
 ```
 
-### 命令行参数
+### 命令行模式（无界面，适合自动化）
 
-```powershell
-# 直接执行 DDNS 更新（供 NSSM 服务调用）
-.\ddns.ps1 -Run
+```bash
+# 执行一次 DDNS 更新
+ddns run
 
-# 安装 NSSM 服务
-.\ddns.ps1 -Install
+# 安装 Windows 服务（原生，无需 NSSM）
+ddns install
 
-# 卸载 NSSM 服务
-.\ddns.ps1 -Uninstall
+# 卸载 Windows 服务
+ddns uninstall
+
+# 重新运行配置向导
+ddns config
 ```
 
-### NSSM 系统服务
+### Windows 原生服务
 
-选择选项 `6` 后，脚本会自动：
-1. 检测 `nssm.exe` 是否可用
-2. 注册名为 `CloudflareDDNS` 的 Windows 服务
-3. 设置为 **自动启动**，以 **LocalSystem** 身份运行
-4. 立即启动服务
-
-服务会持续运行，每次执行完 DDNS 更新后 NSSM 会自动重启脚本（相当于无限循环，间隔约几秒）。
-
-管理方式：
-- **`services.msc`** 中可查看和手动启停
-- 命令行：`nssm start/stop/restart CloudflareDDNS`
-- 日志文件：`%USERPROFILE%\.ddns\ddns.log`
+运行 `ddns install` 即可注册为 Windows 系统服务，无需 NSSM 或任何第三方工具：
+- 服务名称：`CloudflareDDNS`
+- 启动类型：**自动**（开机自启）
+- 运行身份：**LocalSystem**
+- 每 **5 分钟**执行一次 DDNS 更新
+- 在 `services.msc` 中可启停管理
 
 ## 配置文件
 
-路径：`%USERPROFILE%\.ddns\config.json`
+路径：`%USERPROFILE%\.ddns\config.json`（Windows）或 `~/.ddns/config.json`（Linux/macOS）
 
 ```json
 {
@@ -175,26 +154,43 @@ powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\ddns.ps1"
   "Telegram_Bot_Token": "",
   "Telegram_Chat_ID": "",
   "Feishu_Webhook": "",
-  "Feishu_Secret": "",
-  "Public_IPv4": "",
-  "Public_IPv6": ""
+  "Feishu_Secret": ""
 }
 ```
 
+## 日志
+
+日志路径：`%USERPROFILE%\.ddns\ddns.log`（Windows）或 `~/.ddns/ddns.log`（Linux/macOS）
+
 ## 卸载
 
-```powershell
-# 卸载 NSSM 服务
-.\ddns.ps1 -Uninstall
+```bash
+# 卸载服务（Windows）
+ddns uninstall
 
-# 删除配置文件
-Remove-Item "$env:USERPROFILE\.ddns" -Recurse -Force
+# 删除配置和日志
+rm -rf ~/.ddns
 
-# 删除脚本
-Remove-Item "$env:USERPROFILE\ddns.ps1" -Force
+# 删除程序
+rm ddns
 ```
 
 ---
+
+# 项目结构
+
+| 文件 | 说明 |
+|------|------|
+| `ddns.sh` | Linux bash 版主脚本 |
+| `ddns/` | Go 版源码 |
+| `ddns/main.go` | CLI 入口 + 交互菜单 |
+| `ddns/config.go` | JSON 配置读写 |
+| `ddns/ip.go` | 公网 IPv4/IPv6 检测 |
+| `ddns/cloudflare.go` | Cloudflare API 调用 |
+| `ddns/notify.go` | Telegram + 飞书通知 |
+| `ddns/updater.go` | DDNS 核心更新逻辑 |
+| `ddns/service_windows.go` | 原生 Windows 服务注册 |
+| `ddns/service_stub.go` | 非 Windows 平台服务占位 |
 
 # 工作原理
 
@@ -208,19 +204,19 @@ Remove-Item "$env:USERPROFILE\ddns.ps1" -Force
 
 **Q：如何获取 Cloudflare API Token？**
 
-A：Cloudflare 控制面板 → 我的资料 → API 令牌 → 创建令牌，选择"编辑 DNS 记录"模板。
-
-**Q：Token 需要什么权限？**
-
-A：`Zone / DNS / Edit` 和 `Zone / Zone / Read` 即可。
+A：Cloudflare 控制面板 -> 我的资料 -> API 令牌 -> 创建令牌，选择"编辑 DNS 记录"模板，权限选 `Zone:DNS:Edit` + `Zone:Zone:Read`。
 
 **Q：支持泛域名解析吗？**
 
-A：不支持，需要分别输入每个具体的子域名。
+A：不支持，需要输入具体的子域名。
 
 **Q：如何查看运行日志？**
 
-A：Linux: `journalctl -u ddns.service`；Windows: `%USERPROFILE%\.ddns\ddns.log`。
+A：Linux 脚本版用 `journalctl -u ddns.service`；Go 版日志在 `~/.ddns/ddns.log`。
+
+**Q：Go 版需要安装 Go 环境才能用吗？**
+
+A：不需要。下载编译好的 exe 即可直接运行。只有自行编译才需要 Go 环境。
 
 # License
 
