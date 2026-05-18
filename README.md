@@ -34,8 +34,6 @@ sudo ddns
 
 首次运行自动创建运行脚本，直接进入菜单。之后通过菜单选项自行配置。
 
-> 注意：bash 版仅支持 **Cloudflare**。如需使用 **DNSPod** 或 **腾讯云 DNSPod**，请使用下方的 Go 版。
-
 ### 主菜单
 
 ```
@@ -44,7 +42,7 @@ sudo ddns
  2：停止 DDNS
  3：卸载 DDNS
  4：修改要解析的域名
- 5：配置 Cloudflare API Token
+ 5：配置 DNS 服务商和凭证
  6：配置 Telegram 通知
  7：更改 DDNS 运行时间
  8：配置飞书通知
@@ -53,6 +51,20 @@ sudo ddns
 ### 配置文件
 
 路径：`/etc/DDNS/.config`，安装后自动生成，需手动配置凭证与域名。
+
+```bash
+Provider="cloudflare"          # DNS 服务商: cloudflare / dnspod
+Domains=("example.com")
+ipv6_set="true"
+Domainsv6=("ipv6.example.com")
+API_Token="your_api_token"     # Cloudflare 凭证
+DNSPod_ID=""                   # DNSPod 凭证
+DNSPod_Token=""
+Telegram_Bot_Token=""
+Telegram_Chat_ID=""
+Feishu_Webhook=""
+Feishu_Secret=""
+```
 
 ### 卸载
 

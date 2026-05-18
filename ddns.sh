@@ -114,6 +114,84 @@ source /etc/DDNS/.config
 Old_Public_IPv4="$Old_Public_IPv4"
 Old_Public_IPv6="$Old_Public_IPv6"
 
+# =================== DNSPod 函数 ===================
+
+dnspod_split_domain() {
+    local full="$1"
+    local parts_count=$(echo "$full" | awk -F'.' '{print NF}')
+    if [ "$parts_count" -le 2 ]; then
+        echo "$full|@"
+    else
+        local root=$(echo "$full" | awk -F'.' '{print $(NF-1)"."$NF}')
+        local sub="${full%.$root}"
+        echo "$root|$sub"
+    fi
+}
+
+dnspod_api() {
+    local action="$1"
+    shift
+    local data="login_token=${DNSPod_ID},${DNSPod_Token}&format=json"
+    for pair in "$@"; do
+        data="${data}&${pair}"
+    done
+    curl -s -X POST "https://dnsapi.cn${action}" \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -H "User-Agent: sem-ddns/1.0" \
+        --data "$data"
+}
+
+dnspod_get_domain_id() {
+    local domain="$1"
+    local resp=$(dnspod_api "/Domain.List")
+    echo "$resp" | grep -oP '"id":"\K[^"]*"' | head -1
+}
+
+dnspod_update() {
+    local domain="$1" rtype="$2" value="$3"
+    local split=$(dnspod_split_domain "$domain")
+    local root="${split%%|*}"
+    local sub="${split##*|}"
+
+    # 获取域名 ID
+    local list_resp=$(dnspod_api "/Domain.List")
+    local pairs=$(echo "$list_resp" | grep -oP '"id":"[^"]*","name":"[^"]*"')
+    local domain_id=""
+    while IFS= read -r pair; do
+        [ -z "$pair" ] && continue
+        local curname=$(echo "$pair" | grep -oP '"name":"\K[^"]+')
+        if [ "$curname" = "$root" ]; then
+            domain_id=$(echo "$pair" | grep -oP '"id":"\K[^"]+')
+            break
+        fi
+    done <<< "$pairs"
+    [ -z "$domain_id" ] && echo "未找到 $root 的域名 ID" && return 1
+
+    # 查找记录
+    local record_resp=$(dnspod_api "/Record.List" "domain_id=${domain_id}" "sub_domain=${sub}")
+    local record_id=$(echo "$record_resp" | grep -oP '"id":"\K[^"]*' | head -1)
+    [ -z "$record_id" ] && echo "未找到 $domain 的 $rtype 记录" && return 1
+
+    # 修改记录
+    local mod_resp=$(dnspod_api "/Record.Modify" \
+        "domain_id=${domain_id}" \
+        "record_id=${record_id}" \
+        "sub_domain=${sub}" \
+        "record_type=${rtype}" \
+        "record_line=默认" \
+        "value=${value}")
+    local code=$(echo "$mod_resp" | grep -oP '"code":"\K[^"]*')
+    if [ "$code" = "1" ]; then
+        echo "$domain -> $value 更新成功"
+        return 0
+    else
+        echo "$domain -> $value 更新失败"
+        return 1
+    fi
+}
+
+# =================== Cloudflare 函数 ===================
+
 get_zone_id() {
     local domain="$1"
     local response entry zid zname
@@ -132,35 +210,39 @@ get_zone_id() {
     done | head -1
 }
 
+# =================== 更新分发 ===================
+
+update_domain() {
+    local domain="$1" rtype="$2" value="$3"
+    if [ "$Provider" = "dnspod" ]; then
+        dnspod_update "$domain" "$rtype" "$value"
+    else
+        local zone_id=$(get_zone_id "$domain")
+        [ -z "$zone_id" ] && echo "未找到 $domain 对应的 Zone" && return 1
+
+        local record_id=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$zone_id/dns_records?type=$rtype&name=$domain" \
+             -H "Authorization: Bearer $API_Token" \
+             -H "Content-Type: application/json" \
+             | grep -oP '"id":"\K[^"]+' | head -1)
+        [ -z "$record_id" ] && echo "未找到 $domain 的 $rtype 记录" && return 1
+
+        curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$zone_id/dns_records/$record_id" \
+             -H "Authorization: Bearer $API_Token" \
+             -H "Content-Type: application/json" \
+             --data "{\"type\":\"$rtype\",\"name\":\"$domain\",\"content\":\"$value\"}" >/dev/null 2>&1 && \
+             echo "$domain -> $value 更新成功" || echo "$domain -> $value 更新失败"
+    fi
+}
+
+# =================== 执行更新 ===================
+
 for Domain in "${Domains[@]}"; do
-    Zone_id=$(get_zone_id "$Domain")
-    [ -z "$Zone_id" ] && echo "未找到 $Domain 对应的 Zone，请检查 API Token 权限" && continue
-
-    DNS_IDv4=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$Zone_id/dns_records?type=A&name=$Domain" \
-         -H "Authorization: Bearer $API_Token" \
-         -H "Content-Type: application/json" \
-         | grep -oP '"id":"\K[^"]+' | head -1)
-
-    [ -n "$DNS_IDv4" ] && curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$Zone_id/dns_records/$DNS_IDv4" \
-         -H "Authorization: Bearer $API_Token" \
-         -H "Content-Type: application/json" \
-         --data "{\"type\":\"A\",\"name\":\"$Domain\",\"content\":\"$Public_IPv4\"}" >/dev/null 2>&1
+    update_domain "$Domain" "A" "$Public_IPv4"
 done
 
 if [ "$ipv6_set" = "true" ]; then
     for Domainv6 in "${Domainsv6[@]}"; do
-        Zone_idv6=$(get_zone_id "$Domainv6")
-        [ -z "$Zone_idv6" ] && echo "未找到 $Domainv6 对应的 Zone，请检查 API Token 权限" && continue
-
-        DNS_IDv6=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$Zone_idv6/dns_records?type=AAAA&name=$Domainv6" \
-             -H "Authorization: Bearer $API_Token" \
-             -H "Content-Type: application/json" \
-             | grep -oP '"id":"\K[^"]+' | head -1)
-
-        [ -n "$DNS_IDv6" ] && curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$Zone_idv6/dns_records/$DNS_IDv6" \
-             -H "Authorization: Bearer $API_Token" \
-             -H "Content-Type: application/json" \
-             --data "{\"type\":\"AAAA\",\"name\":\"$Domainv6\",\"content\":\"$Public_IPv6\"}" >/dev/null 2>&1
+        update_domain "$Domainv6" "AAAA" "$Public_IPv6"
     done
 fi
 
@@ -174,25 +256,31 @@ if [[ -n "$Feishu_Webhook" && (("$Public_IPv4" != "$Old_Public_IPv4" && -n "$Pub
     send_feishu_notification
 fi
 
-# 延迟3秒
 sleep 3
 
-# 保存当前的 IP 地址到配置文件，但只有当 IP 地址有变化时才进行更新
 if [[ -n "$Public_IPv4" && "$Public_IPv4" != "$Old_Public_IPv4" ]]; then
     sed -i "s/^Old_Public_IPv4=.*/Old_Public_IPv4=\"$Public_IPv4\"/" /etc/DDNS/.config
 fi
 
-# 检查 IPv6 地址是否有效且发生变化
 if [[ -n "$Public_IPv6" && "$Public_IPv6" != "$Old_Public_IPv6" ]]; then
     sed -i "s/^Old_Public_IPv6=.*/Old_Public_IPv6=\"$Public_IPv6\"/" /etc/DDNS/.config
 fi
 EOF
     cat <<'EOF' > /etc/DDNS/.config
+# DNS 服务商: cloudflare / dnspod
+Provider="cloudflare"
+
 # 多域名支持
 Domains=("your_domain1.com" "your_domain2.com")     # 你要解析的IPv4域名数组
 ipv6_set="setting"                                    # 开启 IPv6 解析
 Domainsv6=("your_domainv6_1.com" "your_domainv6_2.com")  # 你要解析的IPv6域名数组
+
+# Cloudflare 凭证
 API_Token="your_api_token"                         # 你的 Cloudflare API 令牌
+
+# DNSPod 凭证
+DNSPod_ID=""
+DNSPod_Token=""
 
 # Telegram Bot Token 和 Chat ID
 Telegram_Bot_Token=""
@@ -382,7 +470,7 @@ go_ahead(){
   ${GREEN}2${NC}：停止 DDNS
   ${GREEN}3${NC}：${RED}卸载 DDNS${NC}
   ${GREEN}4${NC}：修改要解析的域名
-  ${GREEN}5${NC}：配置 Cloudflare API Token
+  ${GREEN}5${NC}：配置 DNS 服务商和凭证
   ${GREEN}6${NC}：配置 Telegram 通知
   ${GREEN}7${NC}：更改 DDNS 运行时间
   ${GREEN}8${NC}：配置飞书通知"
@@ -422,7 +510,7 @@ go_ahead(){
             check_ddns_install
         ;;
         5)
-            set_cloudflare_api
+            set_dns_provider
             if grep -qiE "alpine" /etc/os-release; then
                 restart_ddns
                 sleep 2
@@ -453,24 +541,51 @@ go_ahead(){
     esac
 }
 
-# 设置Cloudflare Api
-set_cloudflare_api(){
-    echo -e "${Tip}开始配置CloudFlare API..."
-    echo
+# 设置 DNS 服务商和凭证
+set_dns_provider(){
+    echo -e "${Tip}选择 DNS 服务商："
+    echo "  ${GREEN}1${NC}：Cloudflare（API Token）"
+    echo "  ${GREEN}2${NC}：DNSPod（独立版，ID + Token）"
+    read -rp "请选择 [1/2] (默认 1): " provider_choice
 
-    echo -e "${Tip}请输入您的Cloudflare API令牌（API Token）"
-    echo -e "${YELLOW}请在 Cloudflare 控制面板 -> 我的资料 -> API 令牌 中创建或获取${NC}"
-    read -rp "API Token: " Api_Token
-    if [ -z "$Api_Token" ]; then
-        echo -e "${Error}未输入 API Token，无法执行操作！"
-        exit 1
+    if [ "$provider_choice" = "2" ]; then
+        sed -i 's|^#\?Provider=".*"|Provider="dnspod"|g' /etc/DDNS/.config
+
+        echo -e "${Tip}开始配置 DNSPod API..."
+        echo
+        echo -e "${YELLOW}请在 DNSPod 控制台 -> 安全设置 -> API 密钥 中获取${NC}"
+        read -rp "DNSPod ID: " Dp_Id
+        if [ -z "$Dp_Id" ]; then
+            echo -e "${Error}未输入 ID，无法执行操作！"
+            exit 1
+        fi
+        read -rp "DNSPod Token: " Dp_Token
+        if [ -z "$Dp_Token" ]; then
+            echo -e "${Error}未输入 Token，无法执行操作！"
+            exit 1
+        fi
+
+        sed -i 's|^#\?DNSPod_ID=".*"|DNSPod_ID="'"${Dp_Id}"'"|g' /etc/DDNS/.config
+        sed -i 's|^#\?DNSPod_Token=".*"|DNSPod_Token="'"${Dp_Token}"'"|g' /etc/DDNS/.config
+        echo -e "${Info}DNSPod 配置已保存"
     else
-        API_TOKEN="$Api_Token"
-    fi
-    echo -e "${Info}你的 API Token：${RED_ground}${API_TOKEN}${NC}"
-    echo
+        sed -i 's|^#\?Provider=".*"|Provider="cloudflare"|g' /etc/DDNS/.config
 
-    sed -i 's|^#\?API_Token=".*"|API_Token="'"${API_TOKEN}"'"|g' /etc/DDNS/.config
+        echo -e "${Tip}开始配置 CloudFlare API..."
+        echo
+        echo -e "${Tip}请输入您的 Cloudflare API 令牌（API Token）"
+        echo -e "${YELLOW}请在 Cloudflare 控制面板 -> 我的资料 -> API 令牌 中创建或获取${NC}"
+        read -rp "API Token: " Api_Token
+        if [ -z "$Api_Token" ]; then
+            echo -e "${Error}未输入 API Token，无法执行操作！"
+            exit 1
+        fi
+        echo -e "${Info}你的 API Token：${RED_ground}${Api_Token}${NC}"
+        echo
+        sed -i 's|^#\?API_Token=".*"|API_Token="'"${Api_Token}"'"|g' /etc/DDNS/.config
+        echo -e "${Info}Cloudflare 配置已保存"
+    fi
+    echo
 }
 
 # 设置解析的域名
