@@ -27,9 +27,7 @@
 ## 安装
 
 ```bash
-sudo curl -o /usr/bin/ddns https://raw.githubusercontent.com/semgooder/sem-ddns/main/ddns.sh
-sudo chmod +x /usr/bin/ddns
-sudo ddns
+sudo curl -o /usr/bin/ddns https://raw.githubusercontent.com/semgooder/sem-ddns/main/ddns.sh && sudo chmod +x /usr/bin/ddns && sudo ddns
 ```
 
 首次运行自动创建运行脚本，直接进入菜单。之后通过菜单选项自行配置。
