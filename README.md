@@ -32,25 +32,25 @@ sudo chmod +x /usr/bin/ddns
 sudo ddns
 ```
 
-首次运行会自动配置向导。之后参见主菜单管理。
+首次运行自动创建运行脚本，直接进入菜单。之后通过菜单选项自行配置。
 
 ### 主菜单
 
 ```
-0：退出
-1：重启 DDNS
-2：停止 DDNS
-3：卸载 DDNS
-4：修改要解析的域名
-5：配置 Cloudflare API Token
-6：配置 Telegram 通知
-7：更改 DDNS 运行时间
-8：配置飞书通知
+ 0：退出
+ 1：重启 DDNS
+ 2：停止 DDNS
+ 3：卸载 DDNS
+ 4：修改要解析的域名
+ 5：配置 Cloudflare API Token
+ 6：配置 Telegram 通知
+ 7：更改 DDNS 运行时间
+ 8：配置飞书通知
 ```
 
 ### 配置文件
 
-路径：`/etc/DDNS/.config`
+路径：`/etc/DDNS/.config`，安装后自动生成，需手动配置凭证与域名。
 
 ### 卸载
 
@@ -92,7 +92,7 @@ GOOS=darwin GOARCH=amd64 go build -o ddns-macos-amd64 .
 
 ### 首次运行
 
-直接执行，自动进入配置向导：
+直接执行即可进入菜单，无需强制配置：
 
 ```bash
 # Windows
@@ -102,23 +102,30 @@ ddns.exe
 ./ddns
 ```
 
-交互式配置 API Token、域名、通知等。配置完成后可立即使用。
+首次运行会自动创建空配置文件，之后在菜单中按需配置即可。
 
 ## 使用指南
 
 ### 交互菜单
 
 ```
-0：退出
-1：立即执行 DDNS 更新
-2：切换 DNS 服务商
-3：配置 DNS 凭证
-4：配置要解析的域名
-5：配置 Telegram 通知
-6：配置飞书通知
-7：安装 Windows 服务（开机自启）
-8：卸载 Windows 服务
+ 0：退出
+ 1：立即执行 DDNS 更新
+ 2：切换 DNS 服务商
+ 3：配置 DNS 凭证
+ 4：配置要解析的域名
+ 5：配置 Telegram 通知
+ 6：配置飞书通知
+ 7：安装 Windows 服务（开机自启）
+ 8：卸载 Windows 服务
 ```
+
+典型配置流程：
+1. 选 **`2`** 切换 DNS 服务商（Cloudflare / DNSPod / 腾讯云）
+2. 选 **`3`** 输入对应凭证
+3. 选 **`4`** 添加要解析的域名
+4. 可选配置通知（`5` Telegram / `6` 飞书）
+5. 选 **`1`** 立即执行更新测试
 
 ### 命令行模式（无界面，适合自动化）
 
@@ -209,7 +216,7 @@ rm ddns
 # 工作原理
 
 1. 获取当前公网 IP（IPv4 / IPv6）
-2. 调用 Cloudflare API 拉取所有域名区域，自动匹配域名对应的 Zone
+2. 调用对应 DNS 服务商 API 获取域名列表，自动匹配域名所属区域
 3. 查询现有 DNS 记录 ID
 4. 更新 DNS 记录为当前公网 IP
 5. IP 变化时通过 Telegram 和/或飞书发送通知
@@ -219,6 +226,14 @@ rm ddns
 **Q：如何获取 Cloudflare API Token？**
 
 A：Cloudflare 控制面板 -> 我的资料 -> API 令牌 -> 创建令牌，选择"编辑 DNS 记录"模板，权限选 `Zone:DNS:Edit` + `Zone:Zone:Read`。
+
+**Q：如何获取 DNSPod 凭证？**
+
+A：DNSPod 控制台 -> 安全设置 -> API 密钥 -> 创建密钥，获取 ID 和 Token（独立版 API 用）。
+
+**Q：如何获取腾讯云 DNSPod 凭证？**
+
+A：腾讯云控制台 -> 访问管理 -> 访问密钥 -> API 密钥管理，创建 SecretId 和 SecretKey。
 
 **Q：支持泛域名解析吗？**
 
