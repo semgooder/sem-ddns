@@ -765,28 +765,18 @@ stop_ddns(){
 # 检查是否安装DDNS
 check_ddns_install(){
     if [ ! -f "/etc/DDNS/.config" ]; then
-        cop_info
-        echo -e "${Tip}DDNS 未安装，现在开始安装..."
-        echo
         install_ddns
-        set_cloudflare_api
-        set_domain
-        set_telegram_settings
-        set_feishu_settings
-        run_ddns
-        echo -e "${Info}执行 ${GREEN}ddns${NC} 可呼出菜单！"
-    else
-        cop_info
-        check_ddns_status
-        if [[ "$ddns_status" == "running" ]]; then
-            echo -e "${Info}DDNS：${GREEN}已安装${NC} 并 ${GREEN}已启动${NC}"
-        else
-            echo -e "${Tip}DDNS：${GREEN}已安装${NC} 但 ${RED}未启动${NC}"
-            echo -e "${Tip}请选择 ${GREEN}4${NC} 重新配置域名 或 ${GREEN}5${NC} 配置 Cloudflare API Token"
-        fi
-        echo
-        go_ahead
     fi
+
+    cop_info
+    check_ddns_status
+    if [[ "$ddns_status" == "running" ]]; then
+        echo -e "${Info}DDNS：${GREEN}已安装${NC} 并 ${GREEN}已启动${NC}"
+    else
+        echo -e "${Tip}DDNS：${GREEN}已安装${NC} 但 ${RED}未启动${NC}"
+    fi
+    echo
+    go_ahead
 }
 
 check_curl
